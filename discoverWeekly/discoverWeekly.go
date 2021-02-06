@@ -3,12 +3,11 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"strconv"
-	"strings"
-
-	// "ioutil"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/tidwall/gjson"
 )
@@ -95,34 +94,50 @@ func main() {
 
 	//now getting the playlist info
 	DELETELATERTOKEN := accessToken
-	req, err = http.NewRequest("GET", myPlaylistsURL, nil)
-	if err != nil {
-		fmt.Printf("Error making post to playlist url: %v\n", err.Error())
-		return
-	}
-	req.Header.Add("Authorization", "Bearer "+DELETELATERTOKEN)
-	client = &http.Client{}
-	response, err = client.Do(req)
-	if err != nil {
-		fmt.Printf("error getting response from client when streaming from location:\n%v\n%s", response, err.Error())
-		fmt.Println(err.Error())
-		return
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		fmt.Printf("failed getting user's playlists: status code %d\n", response.StatusCode)
-		return
-	}
-
-	content, err = ioutil.ReadAll(response.Body)
-	if err != nil {
-		fmt.Printf("error reading data from response body:\n%s", err.Error())
-		return
-	}
-	playlists := gjson.GetBytes(content, "items").Array()
+	foundPlaylist := false
+	foundError := false
 	discoverWeeklyID := ""
-	for _, playlist := range playlists {
-		if playlist.Get("name").String() == "Discover Weekly" {
-			discoverWeeklyID = playlist.Get("id").String()
+	offset := 0
+	offsetString := "?offset="
+	// loop over all user's playlists 20 (default number) at a time to find desired playlist
+	for !foundError && !foundPlaylist {
+		playListURLPossiblyWithOffset := myPlaylistsURL
+		if offset != 0 {
+			playListURLPossiblyWithOffset = playListURLPossiblyWithOffset + offsetString + strconv.Itoa(offset)
+		}
+		req, err = http.NewRequest("GET", playListURLPossiblyWithOffset, nil)
+		if err != nil {
+			fmt.Printf("Error making post to playlist url: %v\n", err.Error())
+			return
+		}
+		req.Header.Add("Authorization", "Bearer "+DELETELATERTOKEN)
+		client = &http.Client{}
+		response, err = client.Do(req)
+		if err != nil {
+			fmt.Printf("error getting response from client when streaming from location:\n%v\n%s", response, err.Error())
+			fmt.Println(err.Error())
+			return
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			fmt.Printf("failed getting user's playlists: status code %d\n", response.StatusCode)
+			return
+		}
+
+		content, err = ioutil.ReadAll(response.Body)
+		if err != nil {
+			fmt.Printf("error reading data from response body:\n%s", err.Error())
+			return
+		}
+		offset = int(gjson.GetBytes(content, "offset").Int())
+		playlists := gjson.GetBytes(content, "items").Array()
+		for _, playlist := range playlists {
+			if playlist.Get("name").String() == "Discover Weekly" {
+				discoverWeeklyID = playlist.Get("id").String()
+				foundPlaylist = true
+			}
+		}
+		if !foundPlaylist {
+			offset++
 		}
 	}
 
@@ -153,7 +168,11 @@ func main() {
 	tracks := gjson.GetBytes(content, "tracks.items").Array()
 	trackURIsToAdd := []string{}
 	for _, track := range tracks {
-		trackURIsToAdd = append(trackURIsToAdd, track.Get("track.uri").String())
+		trackURI := track.Get("track.uri").String()
+		// if the use removes a song from this playlist, it will still show in the UI but in the backend it was removed
+		if trackURI != "" {
+			trackURIsToAdd = append(trackURIsToAdd, track.Get("track.uri").String())
+		}
 	}
 	//get user's id
 	req, err = http.NewRequest("GET", userURL, nil)
@@ -184,7 +203,9 @@ func main() {
 
 	// make a new playlist
 	createPlaylistURL := "https://api.spotify.com/v1/users/" + userID + "/playlists"
-	bodyData := "{\"name\":\"DW 11/30/2020\", \"public\":false}"
+	year, month, day := time.Now().Date()
+	playlistDate := fmt.Sprint(int(month)) + "/" + fmt.Sprint(day) + "/" + fmt.Sprint(year)
+	bodyData := "{\"name\":\"DW " + playlistDate + "\", \"public\":false}"
 
 	req, err = http.NewRequest("POST", createPlaylistURL, strings.NewReader(bodyData))
 	if err != nil {
